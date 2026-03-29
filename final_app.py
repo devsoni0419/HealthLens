@@ -1,59 +1,112 @@
 import gradio as gr
-from report_processor import process_report
 from generator import generate_response
-from rag.vector_store import search
-from dotenv import load_dotenv
-import os
+from report_processor import process_report
+from tracker import save_and_message, get_history, get_insights, plot_metric
+from reminder import set_reminder
+from safety import safety_wrapper
+from datetime import datetime, timedelta
+import re
 import warnings
 
 warnings.filterwarnings("ignore", module="chromadb")
-load_dotenv(override=True)
 
 
-SYSTEM_DESCRIPTION = """
-🏥 HealthLens AI
+def agent_router(query, file=None):
+    q = query.lower()
 
-• Educational medical assistant
-• Upload lab reports (PDF/Image)
-• Non-diagnostic explanations only
-"""
+    if file is not None:
+        return process_report(file.name)
+
+    if "save" in q or "track" in q:
+        try:
+            parts = q.split()
+            metric = parts[-2]
+            value = parts[-1]
+            return save_and_message(metric, value)
+        except:
+            return "❌ Format: 'save bp 120'"
+
+    if "history" in q:
+        return get_history() + "\n\n👉 To see graph, go to 'Graph' tab."
+
+    if "insight" in q:
+        return get_insights() + "\n\n👉 For visual trends, check 'Graph' tab."
+    if "remind" in q:
+        try:
+            match = re.search(r'(\d+)\s*minute', q)
+            if match:
+                mins = int(match.group(1))
+                target = datetime.now() + timedelta(minutes=mins)
+            else:
+                target = datetime.now() + timedelta(minutes=1)
+
+            return set_reminder(
+                "Health Reminder",
+                target.strftime("%Y-%m-%d"),
+                target.strftime("%H:%M")
+            )
+        except:
+            return "❌ Couldn't understand reminder time"
+
+    response = generate_response(user_query=query)
+    return safety_wrapper(query, response)
 
 
-def chat(message, history):
-    return generate_response(user_query=message)
-
-
-def analyze_report(file):
-    if file is None:
-        return "Please upload a report."
-
-    result = process_report(file.name)
-    return result
+def chat(message, history, file):
+    return agent_router(message, file)
 
 
 with gr.Blocks() as app:
 
-    gr.Markdown("# 🏥 HealthLens AI")
-    gr.Markdown("Educational Medical Assistant (Non-Diagnostic)")
+    gr.Markdown("""
+# 🏥 HealthLens AI (Agent Mode)
+⚠️ Educational only. Not medical advice.
+""")
+    with gr.Tab("ℹ️ Instructions"):
+        gr.Markdown("""
+    ### 🧠 How to Use HealthLens Agent
 
-    with gr.Tab("💬 Ask Question"):
-        chatbot = gr.ChatInterface(
+    #### 💬 Chat Commands
+    - Save health data:
+    → `save bp 120`
+    → `track sugar 140`
+
+    - View history:
+    → `show history`
+
+    - Get insights:
+    → `show insights`
+
+    - Set reminder:
+    → `remind me in 5 minutes`
+
+    #### 📄 Report Analysis
+    - Upload a report in chat → agent will analyze automatically
+
+    #### 📈 Graphs
+    - Go to **Graph tab** to see trends
+
+    ---
+
+    ⚠️ Educational use only. Not medical advice.
+    """)
+    with gr.Tab("🤖 Agent"):
+        gr.Markdown("Ask Anything, Upload Report, Track Health, or Set Reminder")
+        
+
+        gr.ChatInterface(
             fn=chat,
-            title="Health Q&A"
+            additional_inputs=[
+                gr.File(label="Upload Report (optional)")
+            ]
         )
 
-    with gr.Tab("📄 Analyze Report"):
-        file_input = gr.File(
-            label="Upload Lab Report (PDF or Image)",
-            file_types=[".pdf", ".png", ".jpg", ".jpeg"]
-        )
-        output = gr.Markdown()
+    with gr.Tab("📈 Graph"):
+        metric_select = gr.Dropdown(["bp", "sugar"], label="Select Metric")
+        graph_btn = gr.Button("Show Graph")
+        plot_output = gr.Plot()
 
-        analyze_btn = gr.Button("Analyze Report")
-        analyze_btn.click(
-            fn=analyze_report,
-            inputs=file_input,
-            outputs=output
-        )
+        graph_btn.click(plot_metric, inputs=metric_select, outputs=plot_output)
 
-app.launch(share=True)
+
+app.launch()

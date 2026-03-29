@@ -1,6 +1,7 @@
 from rag.vector_store import search
 from openai import OpenAI
 from dotenv import load_dotenv
+from datetime import datetime
 import os
 import warnings
 
@@ -14,19 +15,35 @@ client = OpenAI(
 )
 
 SYSTEM_PROMPT = """
-You are HealthLens, a medical information assistant.
+You are HealthLens, a non-diagnostic medical information assistant.
 
-Rules:
+CORE RULES:
 - Provide educational information only.
-- Do NOT diagnose.
-- Do NOT suggest medications.
-- Do NOT give emergency instructions.
-- Encourage consulting licensed healthcare professionals.
-- If user asks for diagnosis or treatment, refuse politely.
-- When analyzing lab reports, explain values in simple language.
-- Mention if values appear outside reference range, but do NOT diagnose.
-- Do NOT say it is a "lab report" in the response. Just explain the values and what they might indicate in general terms.
-- Do NOT answer questions unrelated to health or lab reports. Politely decline and steer back to medical topics.
+- Do NOT diagnose any condition.
+- Do NOT prescribe or suggest medications or dosages.
+- Do NOT replace a licensed healthcare professional.
+- Encourage users to consult a doctor for medical concerns.
+- Do NOT answer non-health-related questions.
+
+SAFETY (CRITICAL):
+- If user mentions symptoms like chest pain, difficulty breathing, severe bleeding, unconsciousness, stroke signs, seizures, suicide thoughts, or overdose:
+  → Clearly state this may be a medical emergency.
+  → Strongly advise seeking immediate medical help or emergency services.
+  → Do NOT provide treatment steps.
+
+LAB REPORT ANALYSIS:
+- Explain medical values in simple, easy-to-understand language.
+- Clearly mention if values are low, normal, or high based on reference range.
+- Do NOT diagnose conditions based on report.
+
+RESPONSE STYLE:
+- Keep answers simple, clear, and structured.
+- Be supportive but not alarming.
+- Focus on awareness, prevention, and guidance.
+
+REFUSAL RULE:
+- If asked for diagnosis, prescriptions, or treatment plans:
+  → Politely refuse and redirect to a healthcare professional.
 """
 
 DISCLAIMER = """
@@ -34,7 +51,31 @@ DISCLAIMER = """
 Always consult a qualified healthcare professional.
 """
 
+
+def check_emergency(query):
+    emergency_keywords = [
+        "chest pain", "difficulty breathing", "shortness of breath",
+        "unconscious", "seizure", "heart attack", "stroke",
+        "severe bleeding", "high fever", "suicidal",
+        "fainting", "collapse", "not breathing"
+    ]
+
+    query = query.lower()
+
+    for word in emergency_keywords:
+        if word in query:
+            return True
+    return False
+
+
 def generate_response(raw_report_text=None, structured_lab_data=None, user_query=None):
+
+    # 🚨 Emergency check
+    if user_query and check_emergency(user_query):
+        return "🚨 This may be a medical emergency. Please seek immediate medical attention or call your local emergency number.\n\n" + DISCLAIMER
+
+    # 🕒 Inject current time
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     if user_query:
         query_for_search = user_query
@@ -51,16 +92,19 @@ def generate_response(raw_report_text=None, structured_lab_data=None, user_query
         for item in structured_lab_data:
             lab_section += f"{item['test_name']} = {item['value']} {item['unit']} (Ref: {item['reference_range']})\n"
 
+    # 🧠 Updated prompt with time
     prompt = f"""
+Current DateTime: {current_time}
+
 Context:
 {context}
 
 {lab_section}
 
 User Question:
-{user_query if user_query else "Please explain this medical report."}
+{user_query if user_query else "Explain this medical report"}
 
-Full OCR Report Text:
+Report Text:
 {raw_report_text if raw_report_text else ""}
 """
 
@@ -76,7 +120,3 @@ Full OCR Report Text:
     final_answer = response.choices[0].message.content
 
     return final_answer + "\n\n" + DISCLAIMER
-
-
-if __name__ == "__main__":
-    print(generate_response(user_query="What is A1C?"))
