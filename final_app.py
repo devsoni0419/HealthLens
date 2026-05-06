@@ -3,53 +3,25 @@ from generator import generate_response
 from report_processor import process_report
 from tracker import save_and_message, get_history, get_insights, plot_metric
 from reminder import set_reminder
+from pydantic_agent import agent
 from safety import safety_wrapper
-from datetime import datetime, timedelta
-import re
 import warnings
 
 warnings.filterwarnings("ignore", module="chromadb")
 
 
 def agent_router(query, file=None):
-    q = query.lower()
-
+    prompt = query
+    
     if file is not None:
-        return process_report(file.name)
-
-    if "save" in q or "track" in q:
-        try:
-            parts = q.split()
-            metric = parts[-2]
-            value = parts[-1]
-            return save_and_message(metric, value)
-        except:
-            return "❌ Format: 'save bp 120'"
-
-    if "history" in q:
-        return get_history() + "\n\n👉 To see graph, go to 'Graph' tab."
-
-    if "insight" in q:
-        return get_insights() + "\n\n👉 For visual trends, check 'Graph' tab."
-    if "remind" in q:
-        try:
-            match = re.search(r'(\d+)\s*minute', q)
-            if match:
-                mins = int(match.group(1))
-                target = datetime.now() + timedelta(minutes=mins)
-            else:
-                target = datetime.now() + timedelta(minutes=1)
-
-            return set_reminder(
-                "Health Reminder",
-                target.strftime("%Y-%m-%d"),
-                target.strftime("%H:%M")
-            )
-        except:
-            return "❌ Couldn't understand reminder time"
-
-    response = generate_response(user_query=query)
-    return safety_wrapper(query, response)
+        prompt += f"\n\n[USER UPLOADED FILE PATH]: {file.name}\nPlease use the read_report_file tool to read and analyze this report."
+        
+    try:
+        result = agent.run_sync(prompt)
+        response = result.output
+        return safety_wrapper(query, response)
+    except Exception as e:
+        return f"❌ Agent encountered an error: {str(e)}"
 
 
 def chat(message, history, file):
